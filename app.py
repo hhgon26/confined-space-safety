@@ -179,12 +179,33 @@ def get_kma_weather(nx, ny):
 st.title("🚨 밀폐공간 작업자 안전 모니터링 시스템")
 st.markdown("현장 센서 데이터와 기상청 실시간 데이터를 결합하여 작업장의 위험도를 실시간 예측합니다.")
 
-# 사이드바: 입력 파라미터
+# 사이드바 설정
 st.sidebar.header("📍 위치 및 센서 설정")
-
 st.sidebar.subheader("위치 정보 (GPS)")
-lat = st.sidebar.number_input("위도 (Latitude)", value=37.5665, format="%.6f")
-lon = st.sidebar.number_input("경도 (Longitude)", value=126.9780, format="%.6f")
+
+# GPS 정보 요청
+loc = get_geolocation()
+
+# 1. GPS 정보가 수신된 경우
+if loc and 'coords' in loc:
+    default_lat = float(loc['coords']['latitude'])
+    default_lon = float(loc['coords']['longitude'])
+    st.sidebar.success("✅ 현재 핸드폰 GPS 연동 완료")
+
+# 2. 아직 수신 중이거나 위치 권한이 차단된 경우
+else:
+    default_lat = 37.5665
+    default_lon = 126.9780
+    st.sidebar.warning("⚠️ GPS 위치를 불러오는 중이거나 권한이 차단되었습니다.")
+    st.sidebar.caption("수초 후에도 반응이 없으면 아래 버튼을 누르세요.")
+
+# GPS 다시 시도 버튼
+if st.sidebar.button("🔄 GPS 위치 다시 불러오기"):
+    st.rerun()
+
+# 위도/경도 입력 필드
+lat = st.sidebar.number_input("위도 (Latitude)", value=default_lat, format="%.6f")
+lon = st.sidebar.number_input("경도 (Longitude)", value=default_lon, format="%.6f")
 
 st.sidebar.subheader("현장 센서 측정값")
 o2 = st.sidebar.slider("산소 농도 (%)", min_value=10.0, max_value=25.0, value=20.9, step=0.1)
