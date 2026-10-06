@@ -2,11 +2,13 @@ import math
 import os
 import joblib
 import requests
+import urllib3
 import numpy as np
 import pandas as pd
 from datetime import datetime
 import streamlit as st
 import xgboost as xgb
+from streamlit_js_eval import get_geolocation
 
 # =========================================================
 # 페이지 기본 설정
