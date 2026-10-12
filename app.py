@@ -143,66 +143,119 @@ st.markdown("""
 > 아래 **[센서 권한 허용 및 측정 시작]** 버튼을 누르면 스마트폰의 움직임(가속도)을 실시간으로 감지하여 AI 모델에 반영합니다. (아이폰/안드로이드 지원)
 """)
 
-# HTML/JS 컴포넌트를 통해 스마트폰 가속도 센서 값 실시간 수집 및 Streamlit 연동
-sensor_html = """
-<div style="background-color: #f0f2f6; padding: 15px; border-radius: 10px; text-align: center; font-family: sans-serif;">
-    <h3>📱 스마트폰 모션 센서 제어</h3>
-    <button id="permButton" onclick="requestSensors()" style="background-color: #ff4b4b; color: white; border: none; padding: 12px 20px; font-size: 16px; border-radius: 5px; cursor: pointer; font-weight: bold;">
-        센서 권한 허용 및 측정 시작
+# 스마트폰 센서 기록 및 CSV 다운로드가 가능한 올인원 컴포넌트
+logger_html = """
+<div style="background-color: #f8f9fa; padding: 15px; border-radius: 10px; font-family: sans-serif; text-align: center;">
+    <h3>📊 스마트폰 모션 센서 로거</h3>
+    <p style="font-size: 13px; color: #555;">현장 실험 중 데이터를 수집하여 CSV 파일로 저장합니다.</p>
+    
+    <button id="recBtn" onclick="toggleRecording()" style="background-color: #28a745; color: white; border: none; padding: 10px 18px; font-size: 15px; border-radius: 5px; cursor: pointer; font-weight: bold; margin: 5px;">
+        🔴 센서 기록 시작
     </button>
-    <div style="margin-top: 15px; font-size: 18px;">
-        <b>실시간 움직임 지수:</b> <span id="movementVal" style="color: #0066cc; font-size: 22px;">4.0</span>
+    
+    <button id="dlBtn" onclick="downloadCSV()" disabled style="background-color: #6c757d; color: white; border: none; padding: 10px 18px; font-size: 15px; border-radius: 5px; cursor: pointer; font-weight: bold; margin: 5px;">
+        💾 CSV 다운로드
+    </button>
+    
+    <div style="margin-top: 10px; font-size: 14px;">
+        수집된 데이터 포인트: <span id="count" style="font-weight: bold; color: #0066cc;">0</span> 개
     </div>
-    <p id="statusMsg" style="font-size: 13px; color: #666; margin-top: 5px;">상태: 대기 중 (버튼을 눌러주세요)</p>
 </div>
 
 <script>
-let currentMovement = 4.0;
+let isRecording = false;
+let sensorLogs = [];
+let watchInterval = null;
+let currentAcc = {x: 0, y: 0, z: 0};
 
-function requestSensors() {
+// 권한 요청 및 이벤트 등록
+window.addEventListener('devicemotion', (event) => {
+    let acc = event.acceleration || event.accelerationIncludingGravity;
+    if (acc && acc.x !== null) {
+        currentAcc = {
+            x: acc.x || 0,
+            y: acc.y || 0,
+            z: acc.z || 0
+        };
+    }
+});
+
+function toggleRecording() {
+    // iOS 권한 요청 처리
     if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-        DeviceMotionEvent.requestPermission()
-            .then(response => {
-                if (response === 'granted') {
-                    window.addEventListener('devicemotion', handleMotion);
-                    document.getElementById("statusMsg").innerText = "상태: 센서 작동 중 (정상)";
-                    document.getElementById("permButton").style.backgroundColor = "#28a745";
-                    document.getElementById("permButton").innerText = "센서 측정 활성화됨";
-                } else {
-                    alert("센서 권한이 거부되었습니다.");
-                }
-            })
-            .catch(console.error);
-    } else if (typeof window.DeviceMotionEvent !== 'undefined') {
-        window.addEventListener('devicemotion', handleMotion);
-        document.getElementById("statusMsg").innerText = "상태: 센서 작동 중 (정상)";
-        document.getElementById("permButton").style.backgroundColor = "#28a745";
-        document.getElementById("permButton").innerText = "센서 측정 활성화됨";
+        DeviceMotionEvent.requestPermission().then(response => {
+            if (response === 'granted') { startStopProcess(); }
+            else { alert("센서 권한이 거부되었습니다."); }
+        });
     } else {
-        alert("이 브라우저는 모션 센서를 지원하지 않습니다.");
+        startStopProcess();
     }
 }
 
-function handleMotion(event) {
-    let acc = event.acceleration;
-    if (!acc || acc.x === null) {
-        acc = event.accelerationIncludingGravity;
-    }
-    if (acc && acc.x !== null) {
-        let ax = Math.abs(acc.x || 0);
-        let ay = Math.abs(acc.y || 0);
-        let az = Math.abs(acc.z || 0);
-        // 가속도 변화량을 0~10 스케일로 정규화
-        let score = Math.min(10.0, (ax + ay + az) * 1.5);
-        currentMovement = parseFloat(score.toFixed(2));
-        document.getElementById("movementVal").innerText = currentMovement;
+function startStopProcess() {
+    const btn = document.getElementById("recBtn");
+    const dlBtn = document.getElementById("dlBtn");
+    
+    if (!isRecording) {
+        // 기록 시작
+        isRecording = true;
+        sensorLogs = [];
+        btn.innerText = "⏹ 기록 중지";
+        btn.style.backgroundColor = "#dc3545";
+        dlBtn.disabled = true;
+        dlBtn.style.backgroundColor = "#6c757d";
         
-        // Streamlit에 전달하기 위해 hidden input 등에 저장하거나 세션 관리 가능
+        // 1초 주기로 데이터 샘플링 (EDW500 데이터 간격과 맞추거나 필요에 따라 조절)
+        watchInterval = setInterval(() => {
+            let timestamp = new Date().toISOString();
+            let score = Math.min(10.0, (Math.abs(currentAcc.x) + Math.abs(currentAcc.y) + Math.abs(currentAcc.z)) * 1.5);
+            
+            sensorLogs.push({
+                timestamp: timestamp,
+                movement_score: score.toFixed(3),
+                acc_x: currentAcc.x.toFixed(3),
+                acc_y: currentAcc.y.toFixed(3),
+                acc_z: currentAcc.z.toFixed(3)
+            });
+            
+            document.getElementById("count").innerText = sensorLogs.length;
+        }, 1000); // 1초 간격 기록
+        
+    } else {
+        // 기록 중지
+        isRecording = false;
+        clearInterval(watchInterval);
+        btn.innerText = "🔴 센서 기록 시작";
+        btn.style.backgroundColor = "#28a745";
+        
+        if (sensorLogs.length > 0) {
+            dlBtn.disabled = false;
+            dlBtn.style.backgroundColor = "#007bff";
+        }
     }
+}
+
+function downloadCSV() {
+    if (sensorLogs.length === 0) return;
+    
+    let csvContent = "timestamp,movement_score,acc_x,acc_y,acc_z\\n";
+    sensorLogs.forEach(row => {
+        csvContent += `${row.timestamp},${row.movement_score},${row.acc_x},${row.acc_y},${row.acc_z}\\n`;
+    });
+    
+    let blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    let url = URL.createObjectURL(blob);
+    let a = document.createElement('a');
+    a.href = url;
+    a.download = "phone_motion_log.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
 }
 </script>
 """
-components.html(sensor_html, height=180)
+
+components.html(logger_html, height=180)
 
 # 세션 상태나 수동 보정용 슬라이더 제공 (브라우저 센서 연동 보완용)
 st.markdown("---")
