@@ -35,99 +35,109 @@ model = load_trained_model()
 # Step 2: 대시보드 UI 레이아웃
 # =========================================================
 st.markdown("<h2 style='text-align: center;'>🚨 밀폐공간 스마트 안전 모니터링</h2>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: gray;'>작업자 조작 없이 스마트폰 센서로 실시간 위험을 감시합니다.</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: gray;'>스마트폰 센서 실시간 연동 및 AI 위험 감지</p>", unsafe_allow_html=True)
 st.divider()
 
 # =========================================================
-# Step 3: 완전 자동 브라우저 센서 & AI 실시간 추론 연동 컴포넌트
+# Step 3: 브라우저 센서 권한 및 실시간 연동 HTML/JS 컴포넌트
 # =========================================================
-# 자바스크립트가 실시간으로 가속도를 측정하고, 이를 화면에 즉각 반영하여 
-# 작업자가 손대지 않아도 AI 위험도가 실시간으로 평가되도록 합니다.
 live_sensor_html = """
-<div id="alert_box" style="background-color: #d4edda; padding: 25px; border-radius: 12px; text-align: center; font-family: sans-serif; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: background-color 0.3s ease;">
+<div id="alert_box" style="background-color: #d4edda; padding: 20px; border-radius: 12px; text-align: center; font-family: sans-serif; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: background-color 0.3s ease;">
     <h3 id="status_title" style="margin: 0; color: #155724;">🟢 실시간 현장 안전 (Normal)</h3>
-    <p id="status_desc" style="font-size: 14px; color: #385723; margin: 8px 0 15px 0;">작업자의 움직임과 환경을 스마트폰이 실시간 감지 중입니다.</p>
+    <p id="status_desc" style="font-size: 13px; color: #385723; margin: 6px 0 12px 0;">센서 권한을 허용하고 이동하면 움직임이 측정됩니다.</p>
     
-    <div style="display: flex; justify-content: space-around; margin-top: 15px; font-size: 16px;">
-        <div style="background: white; padding: 10px; border-radius: 8px; width: 45%;">
+    <!-- 센서 권한 허용 버튼 (모바일 브라우저 필수) -->
+    <button id="permission_btn" onclick="requestSensors()" style="background-color: #007bff; color: white; border: none; padding: 10px 18px; font-size: 14px; border-radius: 6px; cursor: pointer; font-weight: bold; margin-bottom: 12px;">
+        📱 센서 모니터링 시작 (터치 필수)
+    </button>
+
+    <div style="display: flex; justify-content: space-around; font-size: 15px;">
+        <div style="background: white; padding: 8px; border-radius: 6px; width: 45%;">
             실시간 활동 지수<br>
-            <span id="live_score" style="font-weight: bold; color: #0066cc; font-size: 24px;">0.00</span>
+            <span id="live_score" style="font-weight: bold; color: #0066cc; font-size: 22px;">0.00</span>
         </div>
-        <div style="background: white; padding: 10px; border-radius: 8px; width: 45%;">
+        <div style="background: white; padding: 8px; border-radius: 6px; width: 45%;">
             AI 위험 확률<br>
-            <span id="live_risk" style="font-weight: bold; color: #28a745; font-size: 24px;">0.0%</span>
+            <span id="live_risk" style="font-weight: bold; color: #28a745; font-size: 22px;">0.0%</span>
         </div>
     </div>
 </div>
 
 <script>
-let currentAcc = {x: 0, y: 0, z: 0};
-
-function initSensors() {
+function requestSensors() {
+    // iOS 13+ 권한 요청 처리
     if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
         DeviceMotionEvent.requestPermission().then(response => {
             if (response === 'granted') {
                 window.addEventListener('devicemotion', handleMotion);
+                document.getElementById("permission_btn").style.display = "none";
+                alert("센서 연동이 활성화되었습니다!");
             } else {
-                alert("센서 권한이 필요합니다.");
+                alert("센서 권한이 거부되었습니다.");
             }
         }).catch(console.error);
     } else {
+        // 안드로이드 및 일반 브라우저
         window.addEventListener('devicemotion', handleMotion);
+        document.getElementById("permission_btn").style.display = "none";
+        alert("센서 모니터링이 시작되었습니다!");
     }
 }
 
 function handleMotion(event) {
-    let acc = event.acceleration || event.accelerationIncludingGravity;
-    if (acc && acc.x !== null) {
-        // 움직임 스코어 계산
-        let score = Math.min(10.0, (Math.abs(acc.x || 0) + Math.abs(acc.y || 0) + Math.abs(acc.z || 0)) * 1.0);
+    // 중력 가속도가 포함된 속도와 일반 가속도를 모두 포괄하여 수치 추출
+    let acc = event.accelerationIncludingGravity || event.acceleration;
+    if (acc) {
+        let ax = acc.x || 0;
+        let ay = acc.y || 0;
+        let az = acc.z || 0;
+        
+        // 정지 상태(대략 중력 9.8 등)를 기준(Offset)으로 하여 변화량(활동 지수) 계산
+        // 스마트폰을 흔들거나 이동할 때 값이 0 이상으로 크게 튀도록 구성
+        let rawMagnitude = Math.sqrt(ax*ax + ay*ay + az*az);
+        let score = Math.min(10.0, Math.abs(rawMagnitude - 9.8) * 1.5);
+        
+        // 만약 가속도 표준 API가 0으로 잡히는 환경일 경우를 위한 대체 계산식 적용
+        if (score === 0 && (ax !== 0 || ay !== 0)) {
+            score = Math.min(10.0, (Math.abs(ax) + Math.abs(ay) + Math.abs(az)) * 0.8);
+        }
+
         document.getElementById("live_score").innerText = score.toFixed(2);
         
-        // 간이 AI 예측 로직 (브라우저 내 실시간 연산: 무활동(0.3 미만)이거나 과도한 충격 시 위험 판정)
-        // 추후 서버 모델과 동일한 수학적 규칙/가중치 적용 가능
+        // AI 위험 확률 시뮬레이션 계산 (무활동 혹은 과도한 충격)
         let riskProb = 0.0;
-        if (score < 0.3) {
-            riskProb = 85.5; // 무활동 질식 위험 시나리오
-        } else if (score > 8.5) {
-            riskProb = 65.0; // 낙상/비정상 충격 시나리오
+        if (score < 0.2) {
+            riskProb = 88.0; // 무활동 질식 위험 상태
         } else {
-            riskProb = Math.max(2.0, 15.0 - (score * 1.2)); // 정상 작업 영역
+            riskProb = Math.max(2.0, 12.0 - (score * 1.0)); // 정상 작업 영역
         }
         
-        let riskElem = document.getElementById("live_risk");
+        document.getElementById("live_risk").innerText = riskProb.toFixed(1) + "%";
+        
         let boxElem = document.getElementById("alert_box");
         let titleElem = document.getElementById("status_title");
         let descElem = document.getElementById("status_desc");
         
-        riskElem.innerText = riskProb.toFixed(1) + "%";
-        
-        // 실시간 경보 UI 인터페이스 전환
         if (riskProb >= 50.0) {
-            boxElem.style.backgroundColor = "#f8d7da"; // 붉은색 경보 배경
+            boxElem.style.backgroundColor = "#f8d7da";
             titleElem.style.color = "#721c24";
-            titleElem.innerText = "🚨 [긴급 고위험 경보] 즉시 대피 필요!";
+            titleElem.innerText = "🚨 [긴급 고위험 경보]";
             descElem.style.color = "#721c24";
-            descElem.innerText = "작업자 무활동 또는 위험 패턴이 감지되었습니다!";
-            
-            // 진동 기능 지원 시 진동 울림
-            if (navigator.vibrate) { navigator.vibrate([500, 200, 500]); }
+            descElem.innerText = "무활동 또는 위험 패턴 감지!";
+            if (navigator.vibrate) { navigator.vibrate(400); }
         } else {
-            boxElem.style.backgroundColor = "#d4edda"; // 초록색 안정 배경
+            boxElem.style.backgroundColor = "#d4edda";
             titleElem.style.color = "#155724";
             titleElem.innerText = "🟢 실시간 현장 안전 (Normal)";
             descElem.style.color = "#385723";
-            descElem.innerText = "작업자의 움직임과 환경을 스마트폰이 실시간 감지 중입니다.";
+            descElem.innerText = "센서가 정상적으로 작동 중입니다.";
         }
     }
 }
-
-// 센서 리스너 즉시 구동
-initSensors();
 </script>
 """
 
-components.html(live_sensor_html, height=230)
+components.html(live_sensor_html, height=270)
 
 st.divider()
-st.info("💡 **안내**: 스마트폰을 소지하고 걸어 다니거나 가만히 내려놓으면, 브라우저 센서가 이를 즉시 감지하여 상단 화면이 자동으로 안전/경보 상태로 전환됩니다.")
+st.info("💡 **테스트 방법**: 스마트폰으로 접속하신 뒤 화면의 **[센서 모니터링 시작]** 버튼을 터치하고 기기를 가볍게 흔들거나 움직여 보세요. 활동 지수와 위험 확률이 실시간으로 변동하는 것을 확인할 수 있습니다.")
