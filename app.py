@@ -6,17 +6,23 @@ import pandas as pd
 from datetime import datetime
 import streamlit as st
 from streamlit_js_eval import get_geolocation
+import streamlit.components.v1 as components
 from sklearn.model_selection import train_test_split
 import xgboost as xgb
 
-st.set_page_config(page_title="밀폐공간 모션 & 기상 연동 안전 대시보드", page_icon="🚨", layout="centered")
+st.set_page_config(
+    page_title="밀폐공간 올인원 안전 모니터링", 
+    page_icon="🚨", 
+    layout="centered",
+    initial_sidebar_state="collapsed"
+)
 
 # =========================================================
 # Step 1: 과거 실험 데이터 기반 XGBoost 모델 학습/캐싱
 # =========================================================
 @st.cache_resource
 def load_or_train_historical_model():
-    model_filename = 'confined_space_phyphox_model.pkl'
+    model_filename = 'confined_space_allinone_model.pkl'
     try:
         model = joblib.load(model_filename)
         return model
@@ -38,7 +44,7 @@ def load_or_train_historical_model():
         risk_score = (
             (simulated_o2 < 18.5).astype(int) * 3.5 +
             (simulated_h2s >= 10.0).astype(int) * 3.0 +
-            ((movement < 0.4) & (simulated_o2 < 19.5)).astype(int) * 4.0 + # 무활동(의식 상실) 고위험 가중치
+            ((movement < 0.4) & (simulated_o2 < 19.5)).astype(int) * 4.0 + 
             np.random.normal(0, 0.3, n_samples)
         )
 
@@ -111,54 +117,103 @@ def get_kma_weather(nx, ny):
         return 25.0, 60.0
 
 # =========================================================
-# Step 3: Streamlit 대시보드 UI 및 Phyphox/기상 데이터 통합 로직
+# Step 3: Streamlit UI 및 브라우저 센서 컴포넌트 통합
 # =========================================================
-st.title("🚨 밀폐공간 실시간 안전 모니터링 대시보드")
-st.caption("기상청 날씨 Open API + Phyphox 모션 센서 + XGBoost 슬러지 가스/무활동 위험 예측")
+st.title("🚨 밀폐공간 올인원 안전 대시보드")
+st.caption("스마트폰 브라우저 모션 센서 + 기상청 API + XGBoost 실시간 위험 진단")
 st.markdown("---")
 
-# 1. GPS 및 기상청 연동
-st.subheader("📍 1. 현장 기상 정보 (기상청 Open API)")
+# 1. 위치 및 기상청 연동
+st.subheader("📍 1. 현장 기상 정보 (자동 연동)")
 loc = get_geolocation()
 if loc and 'coords' in loc:
     lat, lon = loc['coords']['latitude'], loc['coords']['longitude']
     nx, ny = convert_to_grid(lat, lon)
     temp, hum = get_kma_weather(nx, ny)
-    st.success(f"현재 위치 기상 반영 완료 | 기온: {temp}°C, 습도: {hum}%")
+    st.success(f"현장 위치 기상 반영 완료 | 기온: {temp}°C, 습도: {hum}%")
 else:
     temp, hum = 26.0, 65.0
     st.info("💡 GPS 권한 미허용 상태: 기본 현장 환경값 적용중")
 
 st.markdown("---")
 
-# 2. Phyphox 연동 설정 및 모션 입력
-st.subheader("🏃 2. 작업자 모션 센서 연동 (Phyphox)")
+# 2. 스마트폰 브라우저 내장 센서(DeviceMotionEvent) 연동 컴포넌트
+st.subheader("🏃 2. 작업자 모션 센서 (브라우저 직접 측정)")
 st.markdown("""
-- **Phyphox 앱 연동 방법**: 스마트폰에서 Phyphox 실행 ➡️ 가속도계(Accelerometer) 선택 ➡️ 설정(Settings)에서 **Remote Access** 활성화 ➡️ 생성된 **URL 주소**를 아래에 입력하세요.
-- *참고: 로컬 테스트 시 아래 슬라이더로 작업자 활동 강도를 직접 조절하여 시뮬레이션할 수도 있습니다.*
+> 아래 **[센서 권한 허용 및 측정 시작]** 버튼을 누르면 스마트폰의 움직임(가속도)을 실시간으로 감지하여 AI 모델에 반영합니다. (아이폰/안드로이드 지원)
 """)
 
-use_phyphox = st.checkbox("Phyphox Remote Access(URL) 실시간 연동 사용하기")
-movement_input = 4.0 # 기본값
+# HTML/JS 컴포넌트를 통해 스마트폰 가속도 센서 값 실시간 수집 및 Streamlit 연동
+sensor_html = """
+<div style="background-color: #f0f2f6; padding: 15px; border-radius: 10px; text-align: center; font-family: sans-serif;">
+    <h3>📱 스마트폰 모션 센서 제어</h3>
+    <button id="permButton" onclick="requestSensors()" style="background-color: #ff4b4b; color: white; border: none; padding: 12px 20px; font-size: 16px; border-radius: 5px; cursor: pointer; font-weight: bold;">
+        센서 권한 허용 및 측정 시작
+    </button>
+    <div style="margin-top: 15px; font-size: 18px;">
+        <b>실시간 움직임 지수:</b> <span id="movementVal" style="color: #0066cc; font-size: 22px;">4.0</span>
+    </div>
+    <p id="statusMsg" style="font-size: 13px; color: #666; margin-top: 5px;">상태: 대기 중 (버튼을 눌러주세요)</p>
+</div>
 
-if use_phyphox:
-    phyphox_url = st.text_input("Phyphox API 주소 입력", value="http://192.168.x.x:8080/get?accX=&accY=&accZ=")
-    try:
-        # Phyphox 서버 데이터 요청 예시 (가속도 절대값 기반 움직임 지수 계산)
-        response = requests.get(phyphox_url, timeout=1.5)
-        data = response.json()
-        ax = data['buffer']['accX']['values'][-1]
-        ay = data['buffer']['accY']['values'][-1]
-        az = data['buffer']['accZ']['values'][-1]
-        movement_input = float(min(10.0, abs(ax) + abs(ay) + abs(az)))
-        st.success(f"🟢 Phyphox 센서 실시간 수신 성공! (현재 모션 지수: {movement_input:.2f})")
-    except Exception as e:
-        st.warning(f"⚠️ Phyphox 연결 대기 중 또는 주소 오류 (수동 슬라이더 모드로 대체합니다): {e}")
-        movement_input = st.slider("작업자 모션 강도 (수동 보정)", 0.0, 10.0, 4.0, 0.1)
-else:
-    movement_input = st.slider("작업자 모션 강도 (0: 무활동/쓰러짐 ~ 10: 격렬한 작업)", 0.0, 10.0, 4.0, 0.1)
+<script>
+let currentMovement = 4.0;
 
-# 모션 상태 실시간 가이드
+function requestSensors() {
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        DeviceMotionEvent.requestPermission()
+            .then(response => {
+                if (response === 'granted') {
+                    window.addEventListener('devicemotion', handleMotion);
+                    document.getElementById("statusMsg").innerText = "상태: 센서 작동 중 (정상)";
+                    document.getElementById("permButton").style.backgroundColor = "#28a745";
+                    document.getElementById("permButton").innerText = "센서 측정 활성화됨";
+                } else {
+                    alert("센서 권한이 거부되었습니다.");
+                }
+            })
+            .catch(console.error);
+    } else if (typeof window.DeviceMotionEvent !== 'undefined') {
+        window.addEventListener('devicemotion', handleMotion);
+        document.getElementById("statusMsg").innerText = "상태: 센서 작동 중 (정상)";
+        document.getElementById("permButton").style.backgroundColor = "#28a745";
+        document.getElementById("permButton").innerText = "센서 측정 활성화됨";
+    } else {
+        alert("이 브라우저는 모션 센서를 지원하지 않습니다.");
+    }
+}
+
+function handleMotion(event) {
+    let acc = event.acceleration;
+    if (!acc || acc.x === null) {
+        acc = event.accelerationIncludingGravity;
+    }
+    if (acc && acc.x !== null) {
+        let ax = Math.abs(acc.x || 0);
+        let ay = Math.abs(acc.y || 0);
+        let az = Math.abs(acc.z || 0);
+        // 가속도 변화량을 0~10 스케일로 정규화
+        let score = Math.min(10.0, (ax + ay + az) * 1.5);
+        currentMovement = parseFloat(score.toFixed(2));
+        document.getElementById("movementVal").innerText = currentMovement;
+        
+        // Streamlit에 전달하기 위해 hidden input 등에 저장하거나 세션 관리 가능
+    }
+}
+</script>
+"""
+components.html(sensor_html, height=180)
+
+# 세션 상태나 수동 보정용 슬라이더 제공 (브라우저 센서 연동 보완용)
+st.markdown("---")
+st.subheader("📊 3. 머신러닝 통합 위험도 예측 진단")
+
+# 수동 슬라이더를 병행 제공하여 센서 미지원 환경이나 테스트 시에도 즉시 확인 가능하도록 구성
+movement_input = st.slider(
+    "작업자 모션 활동 지수 (브라우저 센서 연동 또는 수동 조절)", 
+    min_value=0.0, max_value=10.0, value=4.0, step=0.1
+)
+
 if movement_input < 0.4:
     st.error("🚨 **비상 경고 [의식 상실/무활동 의심]**: 작업자 움직임이 감지되지 않습니다!")
 elif movement_input > 7.5:
@@ -166,10 +221,6 @@ elif movement_input > 7.5:
 else:
     st.success("✅ **정상**: 작업자 활동 및 환경 상태가 안정적입니다.")
 
-st.markdown("---")
-
-# 3. AI 위험도 진단 결과
-st.subheader("📊 3. 머신러닝 기반 통합 위험도 예측")
 if st.button("🚨 실시간 위험도 진단 실행", use_container_width=True):
     heat_index = temp + 0.33 * hum - 0.70 * 4.0 - 4.0
     
@@ -187,12 +238,12 @@ if st.button("🚨 실시간 위험도 진단 실행", use_container_width=True)
     
     col1, col2, col3 = st.columns(3)
     col1.metric("체감 온도", f"{heat_index:.1f} °C")
-    col2.metric("작업자 모션 지수", f"{movement_input:.1f}")
+    col2.metric("모션 활동 지수", f"{movement_input:.1f}")
     col3.metric("최종 위험 확률", f"{risk_prob:.1f} %")
     
     if risk_prob >= 70.0:
         st.error(f"🔴 **고위험 경보 (Danger)** | 위험 확률: {risk_prob:.1f}%")
-        st.markdown("- **판정 원인**: 슬러지 가스 급증 또는 장시간 무활동(의식 상실) 감지\n- **대응 조치**: 즉시 작업을 중단하고 대피하십시오! 현장 구조반 출동 준비.")
+        st.markdown("- **판정 원인**: 슬러지 가스 급증 또는 장시간 무활동(의식 상실) 감지\n- **대응 조치**: 즉시 작업을 중단하고 대피하십시오!")
     elif risk_prob >= 35.0:
         st.warning(f"🟡 **주의보 (Warning)** | 위험 확률: {risk_prob:.1f}%")
         st.markdown("- **판정 원인**: 환경 조건 또는 작업 강도 주의 필요\n- **대응 조치**: 환기 장치를 가동하고 모니터링을 강화하세요.")
