@@ -18,65 +18,14 @@ st.set_page_config(
 )
 
 # =========================================================
-# Step 1: 과거 실험 데이터 기반 XGBoost 모델 학습/캐싱
+# Step 1: 실측 데이터 기반 학습된 XGBoost 모델 불러오기 (여기에 추가!)
 # =========================================================
 @st.cache_resource
-def load_or_train_historical_model():
-    model_filename = 'confined_space_allinone_model.pkl'
-    try:
-        model = joblib.load(model_filename)
-        return model
-    except Exception:
-        np.random.seed(42)
-        n_samples = 20000
+def load_trained_model():
+    # 방금 train_model.py를 통해 생성한 실측 통합 모델 파일 로드
+    return joblib.load('edw500_phone_integrated_model.pkl')
 
-        temperature = np.random.uniform(15.0, 35.0, n_samples)
-        humidity = np.random.uniform(30.0, 95.0, n_samples)
-        movement = np.random.uniform(0.0, 10.0, n_samples)
-
-        # 실험 데이터 특성 반영: 슬러지 교란 및 무활동 질식 시나리오
-        simulated_o2 = 20.9 - (movement * 0.04) + np.random.normal(0, 0.2, n_samples)
-        simulated_h2s = 0.2 + (movement * 0.4) + np.random.exponential(scale=1.0, size=n_samples)
-        simulated_co2 = 400.0 + (movement * 45.0) + np.random.normal(0, 40.0, n_samples)
-        heat_index = temperature + 0.33 * humidity - 0.70 * 4.0 - 4.0
-
-        # 위험 레이블 판정식 (가스 초과 혹은 쓰러져서 움직임이 없는 무활동 상태)
-        risk_score = (
-            (simulated_o2 < 18.5).astype(int) * 3.5 +
-            (simulated_h2s >= 10.0).astype(int) * 3.0 +
-            ((movement < 0.4) & (simulated_o2 < 19.5)).astype(int) * 4.0 + 
-            np.random.normal(0, 0.3, n_samples)
-        )
-
-        y = (risk_score >= 2.8).astype(int)
-
-        df = pd.DataFrame({
-            'temperature': temperature,
-            'humidity': humidity,
-            'movement': movement,
-            'simulated_o2': simulated_o2,
-            'simulated_h2s': simulated_h2s,
-            'simulated_co2': simulated_co2,
-            'heat_index': heat_index,
-            'risk_label': y
-        })
-
-        X = df.drop(columns=['risk_label'])
-        y_target = df['risk_label']
-
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y_target, test_size=0.2, random_state=42, stratify=y_target
-        )
-
-        model = xgb.XGBClassifier(
-            n_estimators=200, learning_rate=0.05, max_depth=6,
-            subsample=0.8, colsample_bytree=0.8, random_state=42, eval_metric='logloss'
-        )
-        model.fit(X_train, y_train)
-        joblib.dump(model, model_filename)
-        return model
-
-model = load_or_train_historical_model()
+model = load_trained_model()
 
 # =========================================================
 # Step 2: 기상청 Open API 연동 함수
