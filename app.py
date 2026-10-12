@@ -224,31 +224,25 @@ else:
     st.success("✅ **정상**: 작업자 활동 및 환경 상태가 안정적입니다.")
 
 if st.button("🚨 실시간 위험도 진단 실행", use_container_width=True):
-    heat_index = temp + 0.33 * hum - 0.70 * 4.0 - 4.0
-    
-    input_data = pd.DataFrame([{
-        'temperature': temp,
-        'humidity': hum,
-        'movement': movement_input,
-        'simulated_o2': 20.9 - (movement_input * 0.04),
-        'simulated_h2s': 0.2 + (movement_input * 0.4),
-        'simulated_co2': 400.0 + (movement_input * 45.0),
-        'heat_index': heat_index
-    }])
-    
-    risk_prob = model.predict_proba(input_data)[0][1] * 100
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("체감 온도", f"{heat_index:.1f} °C")
-    col2.metric("모션 활동 지수", f"{movement_input:.1f}")
-    col3.metric("최종 위험 확률", f"{risk_prob:.1f} %")
-    
-    if risk_prob >= 70.0:
-        st.error(f"🔴 **고위험 경보 (Danger)** | 위험 확률: {risk_prob:.1f}%")
-        st.markdown("- **판정 원인**: 슬러지 가스 급증 또는 장시간 무활동(의식 상실) 감지\n- **대응 조치**: 즉시 작업을 중단하고 대피하십시오!")
-    elif risk_prob >= 35.0:
-        st.warning(f"🟡 **주의보 (Warning)** | 위험 확률: {risk_prob:.1f}%")
-        st.markdown("- **판정 원인**: 환경 조건 또는 작업 강도 주의 필요\n- **대응 조치**: 환기 장치를 가동하고 모니터링을 강화하세요.")
+    if model is not None:
+        # 1. 학습 모델이 요구하는 컬럼 이름과 순서('movement_score', 'O2', 'CO2', 'H2S')를 정확히 일치시킴
+        input_data = pd.DataFrame([[
+            movement_input,               # movement_score
+            20.9 - (movement_input * 0.02), # O2 (산소 농도 추정/반영)
+            0.05 + (movement_input * 0.01), # CO2 (이산화탄소 농도 추정/반영)
+            0.0                           # H2S (황화수소 기본값)
+        ]], columns=['movement_score', 'O2', 'CO2', 'H2S'])
+        
+        # 2. 모델 예측 수행
+        risk_prob = model.predict_proba(input_data)[0][1] * 100
+        
+        col1, col2 = st.columns(2)
+        col1.metric("모션 활동 지수", f"{movement_input:.1f}")
+        col2.metric("최종 위험 확률", f"{risk_prob:.1f} %")
+        
+        if risk_prob >= 50.0:
+            st.error(f"🔴 **고위험 경보 (Danger)** | 위험 확률: {risk_prob:.1f}%")
+        else:
+            st.success(f"🟢 **정상 (Normal)** | 위험 확률: {risk_prob:.1f}%")
     else:
-        st.success(f"🟢 **정상 (Normal)** | 위험 확률: {risk_prob:.1f}%")
-        st.markdown("- **상태**: 현재 위험 요소가 발견되지 않았습니다.")
+        st.warning("모델 파일이 로드되지 않았습니다.")
